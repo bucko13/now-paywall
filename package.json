@@ -1,0 +1,13 @@
+{
+  "name": "ln-builder",
+  "version": "1.0.0",
+  "description": "Server for interacting with an open node lightning node",
+  "main": "index.js",
+  "author": "Bucko",
+  "license": "MIT",
+  "private": false,
+  "dependencies": {
+    "express": "^4.17.1",
+    "opennode": "^1.1.1"
+  }
+}
