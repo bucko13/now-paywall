@@ -4,7 +4,8 @@
   "build": {
     "env": {
       "SESSION_SECRET": "@session-secret",
-      "OPEN_NODE_KEY": "@open-node-key"
+      "OPEN_NODE_KEY": "@open-node-key",
+      "CAVEAT_KEY": "@caveat-key"
     }
   },
   "builds": [
@@ -15,7 +16,7 @@
   ],
   "routes": [
     {
-      "src": "/api/node(.*)",
+      "src": "/api(.*)",
       "dest": "index.js"
     }
   ]

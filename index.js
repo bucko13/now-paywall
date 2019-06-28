@@ -1,62 +1,65 @@
 /* eslint-disable no-console */
 const express = require('express')
 const app = express()
+const cors = require('cors')
+const MacaroonsBuilder = require('macaroons.js').MacaroonsBuilder
 
-app.post('/api/node/invoice', async (req, res) => {
-  const { time, filename, docId } = req.body // time in seconds
-  const paymentConfig = req.session['payment-config']
+app.use(cors())
+
+app.post('/api/invoice', async (req, res) => {
+
+  const { time, title, docId } = req.body // time in seconds
   const opennode = require('opennode')
+  const env = process.env.ENVIRONMENT || 'dev'
+
   opennode.setCredentials(process.env.OPEN_NODE_KEY, 'dev')
 
   try {
     console.log('creating invoice')
     const invoice = await opennode.createCharge({
-      description: `${time} seconds in the lightning reader for ${filename}`,
+      description: `${time} seconds in the lightning reader for ${title}`,
       amount: time,
       auto_settle: false,
     })
-    console.log('invoice:', invoice)
-    req.session['payment-config'] = {
-      ...paymentConfig,
-      invoiceId: invoice.id,
-      pendingTime: time,
-      filename,
-      docId,
-    }
+
     res.status(200).json(invoice)
   } catch (error) {
     console.error(`${error.status} | ${error.message}`)
-    res.status(400).json()
+    res.status(400).json({ message: error.message})
   }
 })
 
-app.get('/api/node/invoice', async (req, res) => {
-  if (!req.session)
-    return res.status(404).json({ message: 'No session information available to retrieve invoice' })
-  const opennode = require('opennode')
-  const { invoiceId, pendingTime } = req.session['payment-config']
-  const milli = pendingTime * 1000
+app.get('/api/invoice', async (req, res) => {
+  const { id: invoiceId } = req.query
 
   if (!invoiceId)
-    return res.status(404).json({ message: 'no invoice for that user' })
+    return res.status(400).json({ message: 'Missing invoiceId in request' })
+
+  const opennode = require('opennode')
 
   opennode.setCredentials(process.env.OPEN_NODE_KEY, 'dev')
 
   try {
     console.log('checking for invoiceId:', invoiceId)
     const data = await opennode.chargeInfo(invoiceId)
-    const status = data.status
+
+    // amount is in satoshis which is equal to the amount of seconds paid for
+    const {status, amount} = data
+    const milli = amount * 1000
     if (status === 'paid') {
+      // create discharge macaroon
+      const location = req.headers['x-forwarded-proto'] + '://' + req.headers['x-now-deployment-url']
+      console.log('location:', location)
       // add 1 second of "free time" as a buffer
-      req.session['payment-config'].expiration = new Date(
-        Date.now() + milli + 1000
-      )
-      // remove "pending" status
-      req.session['payment-config'].pendingTime = null
-      console.log(`Invoice ${invoiceId} has been paid`)
+      const time = new Date(Date.now() + milli + 1000)
+      const macaroon = new MacaroonsBuilder(location, process.env.CAVEAT_KEY, invoiceId)
+          .add_first_party_caveat(`time < ${time}`)
+          .getMacaroon();
+
+      console.log(`Invoice ${invoiceId} has been paid and is valid until ${time}`)
       return res
         .status(200)
-        .json({ status, expiration: req.session['payment-config'].expiration })
+        .json({ status, discharge: macaroon.serialize() })
     } else if (status === 'processing' || status === 'unpaid') {
       console.log('still processing invoice %s...', invoiceId)
       return res.status(202).json({ status })
