@@ -49,7 +49,7 @@ app.get('/api/invoice', async (req, res) => {
     if (status === 'paid') {
       // create discharge macaroon
       const location = req.headers['x-forwarded-proto'] + '://' + req.headers['x-now-deployment-url']
-      console.log('location:', location)
+
       // add 1 second of "free time" as a buffer
       const time = new Date(Date.now() + milli + 1000)
       const macaroon = new MacaroonsBuilder(location, process.env.CAVEAT_KEY, invoiceId)
