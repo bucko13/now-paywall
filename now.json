@@ -3,7 +3,6 @@
   "name": "ln-builder",
   "build": {
     "env": {
-      "SESSION_SECRET": "@session-secret",
       "OPEN_NODE_KEY": "@open-node-key",
       "CAVEAT_KEY": "@caveat-key"
     }
