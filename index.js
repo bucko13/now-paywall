@@ -50,8 +50,8 @@ app.get('/api/invoice', async (req, res) => {
       // create discharge macaroon
       const location = req.headers['x-forwarded-proto'] + '://' + req.headers['x-now-deployment-url']
 
-      // add 1 second of "free time" as a buffer
-      const time = new Date(Date.now() + milli + 1000)
+      // add 200 milliseconds of "free time" as a buffer
+      const time = new Date(Date.now() + milli + 200)
       const macaroon = new MacaroonsBuilder(location, process.env.CAVEAT_KEY, invoiceId)
           .add_first_party_caveat(`time < ${time}`)
           .getMacaroon();
