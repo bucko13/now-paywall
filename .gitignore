@@ -41,3 +41,5 @@ jspm_packages
 
 # Custom
 .DS_Store
+
+example/app.js
