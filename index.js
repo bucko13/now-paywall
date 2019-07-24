@@ -22,8 +22,11 @@ module.exports = {
     Object.keys(json.dependencies).forEach(dep => {
       pkg.dependencies[dep] = json.dependencies[dep]
     })
-    updatedFiles['package.json'] = new FileBlob({ data: JSON.stringify(pkg) })
-
+    // updatedFiles['package.json'] = new FileBlob({ data: JSON.stringify(pkg) })
+    fs.writeFileSync(
+      path.join(workPath, 'package.json'),
+      JSON.stringify(pkg, null, 2)
+    )
     console.log(`setting paywall entrypoint...`)
     updatedFiles['_entrypoint.js'] = files[entrypoint]
 
@@ -46,6 +49,7 @@ module.exports = {
     // Must be after user's entrypoint has been moved to _entrypoint reference
     updatedFiles[entrypoint] = updatedEntrypoint
 
+    console.log('updatedFiles:', updatedFiles)
     console.log('and now back to your regularly scheduled @now/node builder')
     return build({ entrypoint, files: updatedFiles, workPath, ...rest })
   },
