@@ -51,9 +51,9 @@ module.exports = {
     console.log('Symlinking entrypoint directory to tmp directory...')
     fs.symlinkSync(workPath, entryDir)
 
-    // update `fsPath`s in new files object to point to symlinked files in tmpdir
+    // update `fsPath`s in new files object to point to symlinked files in entryDir
     for (let file in tmpFiles) {
-      tmpFiles[file].fsPath = path.join(tmpDir, file)
+      tmpFiles[file].fsPath = path.join(entryDir, file)
     }
 
     // move app.js into tmp dir and update import to point to user's entrypoint
