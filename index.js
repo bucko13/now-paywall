@@ -64,7 +64,7 @@ module.exports = {
     )
 
     // if in dev and working in the tmp virtual directory
-    // then we need to update the fsPaths for the
+    // then we need to update the fsPaths for the new references
     if (isDev)
       // update `fsPath`s in new files object to point to symlinked files in entryDir
       for (let file in virtualFiles) {
@@ -87,7 +87,7 @@ module.exports = {
     if (isDev) {
       const entrypointImport = path.join(entryDir, entrypoint)
       console.log(
-        `Import the user's entrypoint, ${entrypointImport}, in the paywall server entrypoint as middleware`
+        `Setting the user's entrypoint, ${entrypointImport}, in the paywall server entrypoint as middleware`
       )
       // in dev environment, we need to update the import for the user's entrypoint
       // to point to the symlinked directory
