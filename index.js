@@ -42,11 +42,6 @@ module.exports = {
       JSON.stringify(pkg, null, 2)
     )
 
-    // save reference to new package.json in the tmpFiles map that will be passed to build
-    tmpFiles['package.json'] = new FileFsRef({
-      fsPath: path.join(tmpDir, 'package.json'),
-    })
-
     // symlink the workPath directory (i.e. where the entrypoint is) to the tmp dir
     console.log('Symlinking entrypoint directory to tmp directory...')
     fs.symlinkSync(workPath, entryDir)
@@ -56,6 +51,11 @@ module.exports = {
       tmpFiles[file].fsPath = path.join(entryDir, file)
     }
 
+    // save reference to new package.json in the tmpFiles map that will be passed to build
+    // and we don't care about a package.json in the entryDir since we've combined them
+    tmpFiles['package.json'] = new FileFsRef({
+      fsPath: path.join(tmpDir, 'package.json'),
+    })
     // move app.js into tmp dir and update import to point to user's entrypoint
     console.log('Updating builder entrypoint to the paywall server...')
 
