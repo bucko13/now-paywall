@@ -1,8 +1,14 @@
 {
   "dependencies": {
+    "@radar/lnrpc": "^0.6.0-beta.3",
     "cors": "^2.8.5",
     "express": "^4.17.1",
+    "ln-service": "bucko13/ln-service#avoid-bigint-literals",
+    "lnrpc": "^0.6.1",
     "macaroons.js": "^0.3.8",
     "opennode": "^1.1.1"
+  },
+  "engines": {
+    "node": ">0.12.0"
   }
 }

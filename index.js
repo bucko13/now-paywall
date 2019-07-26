@@ -42,7 +42,12 @@ module.exports = {
     console.log(`Merging paywall dependencies with package.json`)
 
     // merge the package.jsons
-    let pkg = { dependencies: {} }
+    let pkg = {
+      dependencies: {},
+      engines: {
+        node: '>0.12.0',
+      },
+    }
     if (files['package.json']) {
       const stream = files['package.json'].toStream()
       const { data } = await FileBlob.fromStream({ stream })

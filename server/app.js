@@ -7,6 +7,7 @@
 const express = require('express')
 const cors = require('cors')
 const MacaroonsBuilder = require('macaroons.js').MacaroonsBuilder
+const lnService = require('ln-service')
 
 let protectedRoute = require('./_entrypoint')
 
@@ -16,17 +17,64 @@ const app = express()
 
 app.use(cors())
 
+// TODO: Test if we can do our required operations with just the
+// invoice.macaroon. Mostly a question of if ln-service works
+// with that macaroon, but should be ok.
+
 // TODO: Add support for OpenNode OR self-hosted ln node
 // this middleware should then check which one is enabled and verify
 // that it is configured correctly
-app.use('*/invoice', (req, res, next) => {
-  if (!process.env.OPEN_NODE_KEY)
-    next(
-      new Error(
-        'No OpenNode API Key. Paywall operator must set key as environment variable when deploying.'
-      )
+
+function testEnvVars() {
+  const { OPEN_NODE_KEY, LN_CERT, LN_MACAROON, LN_SOCKET } = process.env
+
+  const lndConfigs = [LN_CERT, LN_MACAROON, LN_SOCKET]
+
+  // if we have all lndConfigs then return true
+
+  if (lndConfigs.every(config => config !== undefined)) return true
+
+  // if we no lnd configs but an OPEN_NODE_KEY then return true
+  if (lndConfigs.every(config => config === undefined) && OPEN_NODE_KEY)
+    return true
+
+  // if we have some lnd configs but not all, throw that we're missing some
+  if (lndConfigs.some(config => config === undefined))
+    throw new Error(
+      'Missing configs to connect to LND node. Need macaroon, socket, and tls cert.'
     )
-  else next()
+
+  // otherwise we have no lnd configs and no OPEN_NODE_KEY
+  // throw that there are no ln configs
+  throw new Error(
+    'No configs set in environment to connect to a lightning node. See README for instructions: https://github.com/bucko13/now-paywall'
+  )
+}
+
+app.use('*', async (req, res, next) => {
+  try {
+    testEnvVars()
+    const { OPEN_NODE_KEY, LN_CERT, LN_MACAROON, LN_SOCKET } = process.env
+    // if the tests pass above and we don't have a
+    // OPEN_NODE_KEY then we need to setup the lnd service
+    if (!OPEN_NODE_KEY) {
+      const { lnd } = lnService.authenticatedLndGrpc({
+        cert: LN_CERT,
+        macaroon: LN_MACAROON,
+        socket: LN_SOCKET,
+      })
+      console.log('lnd:', lnd)
+      console.log('dirname:', __dirname)
+      // console.log((await lnService.getWalletInfo({ lnd })).public_key)
+    }
+    next()
+  } catch (e) {
+    console.error(
+      'Problem with configs for connecting to lightning node:',
+      e.message
+    )
+    next("Could not connect to the paywall's lightning node.")
+  }
 })
 
 app.post('*/invoice', async (req, res) => {
