@@ -53,6 +53,7 @@ function testEnvVars() {
 
 app.use('*', async (req, res, next) => {
   try {
+    console.log('checking env vars for ln connection')
     testEnvVars()
     const { OPEN_NODE_KEY, LN_CERT, LN_MACAROON, LN_SOCKET } = process.env
     // if the tests pass above and we don't have a
@@ -63,9 +64,8 @@ app.use('*', async (req, res, next) => {
         macaroon: LN_MACAROON,
         socket: LN_SOCKET,
       })
-      console.log('lnd:', lnd)
-      console.log('dirname:', __dirname)
-      // console.log((await lnService.getWalletInfo({ lnd })).public_key)
+      const wallet = await lnService.getWalletInfo({ lnd })
+      console.log('wallet:', wallet)
     }
     next()
   } catch (e) {
