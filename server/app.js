@@ -90,7 +90,7 @@ app.use('*', async (req, res, next) => {
   }
 })
 
-app.post('*/invoice', async (req, res) => {
+app.post('*/invoice', async (req, res, next) => {
   console.log('req.body:', req.body)
   const { time, title, expiresAt } = req.body // time in seconds
 
@@ -106,12 +106,14 @@ app.post('*/invoice', async (req, res) => {
         expires_at: expiresAt,
         tokens: amount,
       })
-    } else {
+    } else if (req.opennode) {
       invoice = await req.opennode.createCharge({
         description,
         amount,
         auto_settle: false,
       })
+    } else {
+      return next('No lightning node information configured on request object')
     }
 
     res.status(200).json(invoice)
@@ -121,7 +123,7 @@ app.post('*/invoice', async (req, res) => {
   }
 })
 
-app.get('*/invoice', async (req, res) => {
+app.get('*/invoice', async (req, res, next) => {
   const { id: invoiceId } = req.query
 
   if (!invoiceId)
@@ -138,10 +140,12 @@ app.get('*/invoice', async (req, res) => {
       console.log('invoiceDetails:', invoiceDetails)
       status = invoiceDetails['is_confirmed'] ? 'paid' : 'unpaid'
       amount = invoiceDetails.tokens
-    } else {
+    } else if (req.opennode) {
       const data = await req.opennode.chargeInfo(invoiceId)
       amount = data.amount
       status = data.status
+    } else {
+      return next('No lightning node information configured on request object')
     }
 
     // amount is in satoshis which is equal to the amount of seconds paid for
