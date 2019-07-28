@@ -21,10 +21,11 @@ app.use(cors())
 // invoice.macaroon. Mostly a question of if ln-service works
 // with that macaroon, but should be ok.
 
-// TODO: Add support for OpenNode OR self-hosted ln node
-// this middleware should then check which one is enabled and verify
-// that it is configured correctly
-
+/*
+ * A utility function for testing our environment variables
+ * to see if we can either create a connection with a self-hosted node
+ * or use an OpenNode key. This will prioritize node configs over OpenNode
+ */
 function testEnvVars() {
   const { OPEN_NODE_KEY, LN_CERT, LN_MACAROON, LN_SOCKET } = process.env
 
@@ -34,7 +35,7 @@ function testEnvVars() {
 
   if (lndConfigs.every(config => config !== undefined)) return true
 
-  // if we no lnd configs but an OPEN_NODE_KEY then return true
+  // if we have no lnd configs but an OPEN_NODE_KEY then return true
   if (lndConfigs.every(config => config === undefined) && OPEN_NODE_KEY)
     return true
 
@@ -47,13 +48,13 @@ function testEnvVars() {
   // otherwise we have no lnd configs and no OPEN_NODE_KEY
   // throw that there are no ln configs
   throw new Error(
-    'No configs set in environment to connect to a lightning node. See README for instructions: https://github.com/bucko13/now-paywall'
+    'No configs set in environment to connect to a lightning node. \
+See README for instructions: https://github.com/bucko13/now-paywall'
   )
 }
 
 app.use('*', async (req, res, next) => {
   try {
-    console.log('checking env vars for ln connection')
     testEnvVars()
     const { OPEN_NODE_KEY, LN_CERT, LN_MACAROON, LN_SOCKET } = process.env
     // if the tests pass above and we don't have a
@@ -65,6 +66,12 @@ app.use('*', async (req, res, next) => {
         socket: LN_SOCKET,
       })
       req.lnd = lnd
+    } else {
+      const env = process.env.ENVIRONMENT || 'dev'
+      const opennode = require('opennode')
+      opennode.setCredentials(OPEN_NODE_KEY, env)
+      req.opennode = opennode
+      console.log('req.opennode:', req.opennode)
     }
     next()
   } catch (e) {
@@ -78,14 +85,10 @@ app.use('*', async (req, res, next) => {
 
 app.post('*/invoice', async (req, res) => {
   const { time, title } = req.body // time in seconds
-  const opennode = require('opennode')
-  const env = process.env.ENVIRONMENT || 'dev'
-
-  opennode.setCredentials(process.env.OPEN_NODE_KEY, env)
 
   try {
     console.log('creating invoice')
-    const invoice = await opennode.createCharge({
+    const invoice = await req.opennode.createCharge({
       description: `${time} seconds in the lightning reader for ${title}`,
       amount: time,
       auto_settle: false,
@@ -104,13 +107,9 @@ app.get('*/invoice', async (req, res) => {
   if (!invoiceId)
     return res.status(400).json({ message: 'Missing invoiceId in request' })
 
-  const opennode = require('opennode')
-
-  opennode.setCredentials(process.env.OPEN_NODE_KEY, 'dev')
-
   try {
     console.log('checking for invoiceId:', invoiceId)
-    const data = await opennode.chargeInfo(invoiceId)
+    const data = await req.opennode.chargeInfo(invoiceId)
 
     // amount is in satoshis which is equal to the amount of seconds paid for
     const { status, amount } = data
@@ -157,7 +156,10 @@ app.get('*/node', async (req, res) => {
     return res.status(200).json({
       pubKey: public_key,
     })
-  } else if (process.env.OPEN_NODE_KEY)
+  } else if (req.opennode)
+    // this is a kind of stand-in, a best guess at what the pubkey for the opennode
+    // node is. Probably need to change this or find another way to get better
+    // connected with the paywall's node. Also need to differentiate between main and testnet
     return res.status(200).json({
       identityPubkey:
         '02eadbd9e7557375161df8b646776a547c5cbc2e95b3071ec81553f8ec2cea3b8c@18.191.253.246:9735',
