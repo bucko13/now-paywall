@@ -134,7 +134,7 @@ app.get('*/invoice', async (req, res, next) => {
 
   try {
     console.log('checking for invoiceId:', invoiceId)
-    let status, amount
+    let status, amount, invoice
     if (req.lnd) {
       const invoiceDetails = await lnService.getInvoice({
         id: invoiceId,
@@ -142,10 +142,12 @@ app.get('*/invoice', async (req, res, next) => {
       })
       status = invoiceDetails['is_confirmed'] ? 'paid' : 'unpaid'
       amount = invoiceDetails.tokens
+      invoice = invoiceDetails.request
     } else if (req.opennode) {
       const data = await req.opennode.chargeInfo(invoiceId)
       amount = data.amount
       status = data.status
+      invoice = data['lightning_invoice'].payreq
     } else {
       return next('No lightning node information configured on request object')
     }
@@ -184,7 +186,7 @@ app.get('*/invoice', async (req, res, next) => {
       return res.status(200).json({ status, discharge: macaroon.serialize() })
     } else if (status === 'processing' || status === 'unpaid') {
       console.log('still processing invoice %s...', invoiceId)
-      return res.status(202).json({ status })
+      return res.status(202).json({ status, invoice })
     } else {
       return res
         .status(400)
