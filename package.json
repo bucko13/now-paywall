@@ -1,13 +1,13 @@
 {
   "name": "now-paywall",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "main": "index.js",
-  "description": "Lambda deployment for a Nodejs Lightning Paywall",
+  "description": "Zeit lambda deployment for a Nodejs Lightning-powered Paywall",
   "author": "Bucko",
   "license": "MIT",
   "private": false,
   "engines": {
-    "node": ">0.11.9"
+    "node": ">0.12.0"
   },
   "dependencies": {
     "@now/node": "^0.11.1",
@@ -20,6 +20,10 @@
     "eslint-config-prettier": "^6.0.0",
     "eslint-plugin-prettier": "^3.1.0",
     "prettier": "^1.18.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bucko13/now-paywall.git"
   },
   "peerDependencies": {
     "@now/build-utils": "^0.9.2"
