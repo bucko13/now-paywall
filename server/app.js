@@ -6,6 +6,7 @@
 
 const express = require('express')
 const cors = require('cors')
+var bodyParser = require('body-parser')
 const MacaroonsBuilder = require('macaroons.js').MacaroonsBuilder
 const lnService = require('ln-service')
 
@@ -15,7 +16,13 @@ const router = express.Router()
 
 const app = express()
 
+// middleware
 app.use(cors())
+// parse application/x-www-form-urlencoded
+app.use(bodyParser.urlencoded({ extended: false }))
+
+// parse application/json
+app.use(bodyParser.json())
 
 // TODO: Test if we can do our required operations with just the
 // invoice.macaroon. Mostly a question of if ln-service works
@@ -84,15 +91,28 @@ app.use('*', async (req, res, next) => {
 })
 
 app.post('*/invoice', async (req, res) => {
-  const { time, title } = req.body // time in seconds
+  console.log('req.body:', req.body)
+  const { time, title, expiresAt } = req.body // time in seconds
 
   try {
     console.log('creating invoice')
-    const invoice = await req.opennode.createCharge({
-      description: `${time} seconds in the lightning reader for ${title}`,
-      amount: time,
-      auto_settle: false,
-    })
+    const description = `${time} seconds in the lightning reader for ${title}`
+    const amount = time
+    let invoice
+    if (req.lnd) {
+      invoice = await lnService.createInvoice({
+        lnd: req.lnd,
+        description,
+        expires_at: expiresAt,
+        tokens: amount,
+      })
+    } else {
+      invoice = await req.opennode.createCharge({
+        description,
+        amount,
+        auto_settle: false,
+      })
+    }
 
     res.status(200).json(invoice)
   } catch (error) {
