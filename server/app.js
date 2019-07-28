@@ -137,7 +137,6 @@ app.get('*/invoice', async (req, res, next) => {
         id: invoiceId,
         lnd: req.lnd,
       })
-      console.log('invoiceDetails:', invoiceDetails)
       status = invoiceDetails['is_confirmed'] ? 'paid' : 'unpaid'
       amount = invoiceDetails.tokens
     } else if (req.opennode) {
@@ -151,6 +150,12 @@ app.get('*/invoice', async (req, res, next) => {
     // amount is in satoshis which is equal to the amount of seconds paid for
     const milli = amount * 1000
     if (status === 'paid') {
+      // check if there is a caveat key before proceeding
+      if (!process.env.CAVEAT_KEY)
+        throw new Error(
+          'API missing caveat key for signing discharge macaroon. Contact node admin.'
+        )
+
       // create discharge macaroon
       const location =
         req.headers['x-forwarded-proto'] +
@@ -159,6 +164,8 @@ app.get('*/invoice', async (req, res, next) => {
 
       // add 200 milliseconds of "free time" as a buffer
       const time = new Date(Date.now() + milli + 200)
+
+      // create the discharge macaroon now we've confirmed invoice is paid
       const macaroon = new MacaroonsBuilder(
         location,
         process.env.CAVEAT_KEY,
@@ -170,6 +177,7 @@ app.get('*/invoice', async (req, res, next) => {
       console.log(
         `Invoice ${invoiceId} has been paid and is valid until ${time}`
       )
+
       return res.status(200).json({ status, discharge: macaroon.serialize() })
     } else if (status === 'processing' || status === 'unpaid') {
       console.log('still processing invoice %s...', invoiceId)
