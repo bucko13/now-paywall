@@ -20,7 +20,6 @@ const app = express()
 app.use(cors())
 // parse application/x-www-form-urlencoded
 app.use(bodyParser.urlencoded({ extended: false }))
-
 // parse application/json
 app.use(bodyParser.json())
 
@@ -92,11 +91,15 @@ app.use('*', async (req, res, next) => {
 
 app.post('*/invoice', async (req, res, next) => {
   console.log('req.body:', req.body)
-  const { time, title, expiresAt } = req.body // time in seconds
+  let { time, title, expiresAt, appName } = req.body // time in seconds
+
+  if (!appName) appName = `[unknown application @ ${req.ip}]`
+
+  if (!title) title = '[unknown data]'
 
   try {
     console.log('creating invoice')
-    const description = `${time} seconds in the lightning reader for ${title}`
+    const description = `Access for ${time} seconds in ${appName} for requested data: ${title}`
     const amount = time
     let invoice
     if (req.lnd) {
@@ -153,7 +156,7 @@ app.get('*/invoice', async (req, res, next) => {
       // check if there is a caveat key before proceeding
       if (!process.env.CAVEAT_KEY)
         throw new Error(
-          'API missing caveat key for signing discharge macaroon. Contact node admin.'
+          'Service is missing caveat key for signing discharge macaroon. Contact node admin.'
         )
 
       // create discharge macaroon
@@ -165,7 +168,7 @@ app.get('*/invoice', async (req, res, next) => {
       // add 200 milliseconds of "free time" as a buffer
       const time = new Date(Date.now() + milli + 200)
 
-      // create the discharge macaroon now we've confirmed invoice is paid
+      // Now that we've confirmed invoice is paid, create the discharge macaroon
       const macaroon = new MacaroonsBuilder(
         location,
         process.env.CAVEAT_KEY,
@@ -195,9 +198,12 @@ app.get('*/invoice', async (req, res, next) => {
 
 app.get('*/node', async (req, res) => {
   if (req.lnd) {
-    const { public_key } = await lnService.getWalletInfo({ lnd: req.lnd })
+    const { public_key, alias } = await lnService.getWalletInfo({
+      lnd: req.lnd,
+    })
     return res.status(200).json({
       pubKey: public_key,
+      alias,
     })
   } else if (req.opennode)
     // this is a kind of stand-in, a best guess at what the pubkey for the opennode
