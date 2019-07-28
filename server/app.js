@@ -64,8 +64,7 @@ app.use('*', async (req, res, next) => {
         macaroon: LN_MACAROON,
         socket: LN_SOCKET,
       })
-      const wallet = await lnService.getWalletInfo({ lnd })
-      console.log('wallet:', wallet)
+      req.lnd = lnd
     }
     next()
   } catch (e) {
@@ -153,10 +152,20 @@ app.get('*/invoice', async (req, res) => {
 
 // TODO: replace with an actual pubkey retrieval call if using a self-hosted node
 app.get('*/node', async (req, res) => {
-  res.status(200).json({
-    identityPubkey:
-      '02eadbd9e7557375161df8b646776a547c5cbc2e95b3071ec81553f8ec2cea3b8c@18.191.253.246:9735',
-  })
+  if (req.lnd) {
+    const { public_key } = await lnService.getWalletInfo({ lnd: req.lnd })
+    return res.status(200).json({
+      pubKey: public_key,
+    })
+  } else if (process.env.OPEN_NODE_KEY)
+    return res.status(200).json({
+      identityPubkey:
+        '02eadbd9e7557375161df8b646776a547c5cbc2e95b3071ec81553f8ec2cea3b8c@18.191.253.246:9735',
+    })
+  else
+    return res
+      .status(404)
+      .json({ message: 'No public key information found for node' })
 })
 
 router.use(protectedRoute)
