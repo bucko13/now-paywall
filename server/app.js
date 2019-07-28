@@ -129,10 +129,22 @@ app.get('*/invoice', async (req, res) => {
 
   try {
     console.log('checking for invoiceId:', invoiceId)
-    const data = await req.opennode.chargeInfo(invoiceId)
+    let status, amount
+    if (req.lnd) {
+      const invoiceDetails = await lnService.getInvoice({
+        id: invoiceId,
+        lnd: req.lnd,
+      })
+      console.log('invoiceDetails:', invoiceDetails)
+      status = invoiceDetails['is_confirmed'] ? 'paid' : 'unpaid'
+      amount = invoiceDetails.tokens
+    } else {
+      const data = await req.opennode.chargeInfo(invoiceId)
+      amount = data.amount
+      status = data.status
+    }
 
     // amount is in satoshis which is equal to the amount of seconds paid for
-    const { status, amount } = data
     const milli = amount * 1000
     if (status === 'paid') {
       // create discharge macaroon
@@ -169,7 +181,6 @@ app.get('*/invoice', async (req, res) => {
   }
 })
 
-// TODO: replace with an actual pubkey retrieval call if using a self-hosted node
 app.get('*/node', async (req, res) => {
   if (req.lnd) {
     const { public_key } = await lnService.getWalletInfo({ lnd: req.lnd })
