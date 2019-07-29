@@ -7,7 +7,11 @@
 const express = require('express')
 const cors = require('cors')
 var bodyParser = require('body-parser')
-const MacaroonsBuilder = require('macaroons.js').MacaroonsBuilder
+const {
+  MacaroonsBuilder,
+  MacaroonsVerifier,
+  verifier,
+} = require('macaroons.js')
 const lnService = require('ln-service')
 const cookieSession = require('cookie-session')
 
@@ -30,7 +34,18 @@ app.use(
     name: 'macaroon',
     maxAge: 86400000,
     secret: process.env.SESSION_SECRET || 'i_am_satoshi_08',
-    overwrite: false,
+    overwrite: true,
+    signed: true,
+  })
+)
+
+// separate cookie for the discharge macaroon
+app.use(
+  cookieSession({
+    name: 'dischargeMacaroon',
+    maxAge: 86400000,
+    secret: process.env.SESSION_SECRET || 'i_am_satoshi_08',
+    overwrite: true,
     signed: true,
   })
 )
@@ -53,7 +68,6 @@ app.use('*', async (req, res, next) => {
       const opennode = require('opennode')
       opennode.setCredentials(OPEN_NODE_KEY, env)
       req.opennode = opennode
-      console.log('req.opennode:', req.opennode)
     }
     next()
   } catch (e) {
@@ -75,7 +89,7 @@ app.post('*/invoice', async (req, res) => {
   }
 })
 
-app.get('*/invoice', async (req, res, next) => {
+app.get('*/invoice', async (req, res) => {
   const { id: invoiceId } = req.query
 
   if (!invoiceId)
@@ -83,50 +97,19 @@ app.get('*/invoice', async (req, res, next) => {
 
   try {
     console.log('checking for invoiceId:', invoiceId)
-    let status, amount, invoice
-    if (req.lnd) {
-      const invoiceDetails = await lnService.getInvoice({
-        id: invoiceId,
-        lnd: req.lnd,
-      })
-      status = invoiceDetails['is_confirmed'] ? 'paid' : 'unpaid'
-      amount = invoiceDetails.tokens
-      invoice = invoiceDetails.request
-    } else if (req.opennode) {
-      const data = await req.opennode.chargeInfo(invoiceId)
-      amount = data.amount
-      status = data.status
-      invoice = data['lightning_invoice'].payreq
-    } else {
-      return next('No lightning node information configured on request object')
-    }
+    const { status, amount, payreq } = await checkInvoiceStatus(req)
 
-    // amount is in satoshis which is equal to the amount of seconds paid for
-    const milli = amount * 1000
     if (status === 'paid') {
-      // check if there is a caveat key before proceeding
-      if (!process.env.CAVEAT_KEY)
-        throw new Error(
-          'Service is missing caveat key for signing discharge macaroon. Contact node admin.'
-        )
-
-      // create discharge macaroon
-      const location =
-        req.headers['x-forwarded-proto'] +
-        '://' +
-        req.headers['x-now-deployment-url']
-
+      // amount is in satoshis which is equal to the amount of seconds paid for
+      const milli = amount * 1000
       // add 200 milliseconds of "free time" as a buffer
       const time = new Date(Date.now() + milli + 200)
+      const caveat = `time < ${time}`
 
-      // Now that we've confirmed invoice is paid, create the discharge macaroon
-      const macaroon = new MacaroonsBuilder(
-        location,
-        process.env.CAVEAT_KEY, // this should be randomly generated, w/ enough entropy and of length > 32 bytes
-        invoiceId
-      )
-        .add_first_party_caveat(`time < ${time}`)
-        .getMacaroon()
+      const macaroon = getDischargeMacaroon(req, caveat)
+
+      // save discharge macaroon in a cookie. Request should have two macaroons now
+      req.session.dischargeMacaroon = macaroon // eslint-disable-line
 
       console.log(
         `Invoice ${invoiceId} has been paid and is valid until ${time}`
@@ -135,7 +118,7 @@ app.get('*/invoice', async (req, res, next) => {
       return res.status(200).json({ status, discharge: macaroon.serialize() })
     } else if (status === 'processing' || status === 'unpaid') {
       console.log('still processing invoice %s...', invoiceId)
-      return res.status(202).json({ status, invoice })
+      return res.status(202).json({ status, payreq })
     } else {
       return res
         .status(400)
@@ -174,7 +157,7 @@ router.use(protectedRoute)
 
 app.use('*/protected', async (req, res, next) => {
   console.log(
-    'Checking if the request has been authenticated or still requires payment...'
+    'Checking if the request has been authorized or still requires payment...'
   )
   const rootMacaroon = req.session.macaroon
   // if there is no macaroon at all
@@ -190,21 +173,72 @@ app.use('*/protected', async (req, res, next) => {
         .status(402)
         .json({ invoice, message: 'Payment required to access content.' })
       // TODO: Do we want to separate the 402 response step from the invoice post step?
+      // i.e. should we just return a 402 and make it the responsibility of the client
+      // to do the POST /invoice to get a new payment request?
     } catch (e) {
       const status = e.status || 400
       return res.status(status).json({ message: e.message })
     }
   }
 
-  // if there is a macaroon but has not been fully validated
-  // (i.e. the invoice isn't paid and/or 3rd party caveat hasn't been discharged)
-  // run the check from `GET /invoice`
-  // if invoice is paid, add the discharge macaroon to the request/cookie
-  // and pass on to `next()`
+  // if there is a root macaroon
+  // check that we also have the discharge macaroon passed either in request query or a session cookie
+  let dischargeMacaroon =
+    req.query.dischargeMacaroon || req.session.dischargeMacaroon
 
-  // TODO: Remove the below once authentication steps are added
-  if (req.query.paid) next()
-  else return res.status(402).json({ message: 'Payment required!' })
+  // if no discharge macaroon then we need to check on the status of the invoice
+  // this can also be done in a separate request to GET /invoice
+  if (!dischargeMacaroon) {
+    if (!req.query.id)
+      return next(
+        'Require an invoice id in the request in order to generate discharge macaroon'
+      )
+
+    // then check status of invoice (Note: Anyone can pay this! It's not tied to the request or origin.
+    // Once paid, the requests are authorized and can get the macaroon)
+    const { status, amount, payreq } = await checkInvoiceStatus(req)
+
+    if (status === 'paid') {
+      // amount is in satoshis which is equal to the amount of seconds paid for
+      const milli = amount * 1000
+      // add 200 milliseconds of "free time" as a buffer
+      const time = new Date(Date.now() + milli + 200)
+      const caveat = `time < ${time}`
+
+      dischargeMacaroon = getDischargeMacaroon(req, caveat)
+
+      console.log(`Invoice has been paid and is valid until ${time}`)
+
+      // if invoice has been paid
+      // then create a discharge macaroon and attach it to a session cookie
+      req.session.dischargeMacaroon = dischargeMacaroon // eslint-disable-line
+    } else if (status === 'processing' || status === 'unpaid') {
+      console.log('still processing invoice %s...', req.query.id)
+      return res.status(202).json({ status, payreq })
+    } else {
+      return res
+        .status(400)
+        .json({ message: `unknown invoice status ${status}` })
+    }
+  }
+
+  // otherwise if there is a discharge macaroon, then we want to verify the whole macaroon
+  try {
+    // make sure request is authenticated by validating the macaroons
+    const exactCaveat = getFirstPartyCaveat(req)
+    validateMacaroons(rootMacaroon, dischargeMacaroon, exactCaveat)
+    // if everything validates then simply run `next()`
+    console.log(
+      'Request from ${req.hostname} authenticated with payment. Sending through paywall'
+    )
+    next()
+  } catch (e) {
+    // if throws with an error message that includes text "expired"
+    // then payment is required again
+    if (e.message.toLowerCase().includes('expired'))
+      return res.status(402).json({ message: e.message })
+    return res.status(400).json({ message: e.message })
+  }
 })
 
 app.use('*/protected', router)
@@ -312,9 +346,7 @@ async function createMacaroon(invoice, req) {
     throw new Error('Missing an invoice object. Cannot create macaroon')
   if (!req) throw new Error('Missing req object. Cannot create macaroon')
 
-  const location = req.headers
-    ? req.headers['x-now-deployment-url']
-    : req.hostname || 'self'
+  const location = getLocation(req)
   const secret = process.env.SESSION_SECRET || 'i_am_satoshi_08'
   const publicIdentifier = 'session secret'
   const builder = new MacaroonsBuilder(
@@ -335,5 +367,150 @@ async function createMacaroon(invoice, req) {
     .getMacaroon()
 
   return macaroon.serialize()
+}
+
+/*
+ * Checkst the status of an invoice given an id
+ * @params {express.request} - request object from expressjs
+ * @params {req.query.id} invoiceId - id of invoice to check status of
+ * @params {req.lnd} [lnd] - ln-service authenticated grpc object
+ * @params {req.opennode} [opennode] - authenticated opennode object for communicating with OpenNode API
+ * @returns {Object} - status - Object with status, amount, and payment request
+ */
+
+async function checkInvoiceStatus({ lnd, opennode, query: { id: invoiceId } }) {
+  if (!invoiceId) throw new Error('Missing invoice id.')
+
+  let status, amount, payreq
+  if (lnd) {
+    const invoiceDetails = await lnService.getInvoice({
+      id: invoiceId,
+      lnd: lnd,
+    })
+    status = invoiceDetails['is_confirmed'] ? 'paid' : 'unpaid'
+    amount = invoiceDetails.tokens
+    payreq = invoiceDetails.request
+  } else if (opennode) {
+    const data = await opennode.chargeInfo(invoiceId)
+    amount = data.amount
+    status = data.status
+    payreq = data['lightning_invoice'].payreq
+  } else {
+    throw new Error(
+      'No lightning node information configured on request object'
+    )
+  }
+
+  return { status, amount, payreq }
+}
+
+/*
+ * Validates a macaroon and should indicate reason for failure
+ * if possible
+ * @params {Macaroon} root - root macaroon
+ * @params {Macaroon} discharge - discharge macaroon from 3rd party validation
+ * @params {String} exactCaveat - a first party, exact caveat to test on root macaroon
+ * @returns {Boolean|Exception} will return true if passed or throw with failure
+ */
+function validateMacaroons(root, discharge, exactCaveat) {
+  const TimestampCaveatVerifier = verifier.TimestampCaveatVerifier
+  root = MacaroonsBuilder.deserialize(root)
+  discharge = MacaroonsBuilder.deserialize(discharge)
+
+  const boundMacaroon = MacaroonsBuilder.modify(root)
+    .prepare_for_request(discharge)
+    .getMacaroon()
+
+  // lets verify the macaroon caveats
+  const valid = new MacaroonsVerifier(root)
+    // root macaroon should have a caveat to match the docId
+    .satisfyExact(exactCaveat.caveat)
+    // discharge macaroon is expected to have the time caveat
+    .satisfyGeneral(TimestampCaveatVerifier)
+    // confirm that the payment node has discharged appropriately
+    .satisfy3rdParty(boundMacaroon)
+    // confirm that this macaroon is valid
+    .isValid(process.env.SESSION_SECRET)
+
+  // if it's valid then we're good to go
+  if (valid) return true
+
+  // if not valid, let's check if it's because of time or because of docId mismatch
+  const TIME_CAVEAT_PREFIX = /time < .*/
+
+  // find time caveat in third party macaroon and check if time has expired
+  for (let caveat of boundMacaroon.caveatPackets) {
+    caveat = caveat.getValueAsText()
+    if (TIME_CAVEAT_PREFIX.test(caveat) && !TimestampCaveatVerifier(caveat))
+      throw new Error(`Time has expired for accessing content`)
+  }
+
+  for (let caveat of root.caveatPackets) {
+    caveat = caveat.getValueAsText()
+    // TODO: should probably generalize the exact caveat check or export as constant.
+    // This would fail even if there is a space missing in the caveat creation
+    if (exactCaveat.prefixMatch(caveat) && caveat !== exactCaveat.caveat)
+      throw new Error('Document id did not match macaroon')
+  }
+}
+
+/*
+ * Returns serealized discharge macaroon, signed with the server's caveat key
+ * and with an attached caveat (if passed)
+ * @params {Express.request} - req object
+ * @params {String} caveat - first party caveat such as `time < ${now + 1000 seconds}`
+ * @returns {Macaroon} discharge macaroon
+ */
+function getDischargeMacaroon(req, caveat) {
+  const { id: invoiceId } = req.query
+
+  if (!invoiceId) throw new Error('Missing invoiceId in request')
+
+  // check if there is a caveat key before proceeding
+  if (!process.env.CAVEAT_KEY)
+    throw new Error(
+      'Service is missing caveat key for signing discharge macaroon. Contact node admin.'
+    )
+
+  // create discharge macaroon
+  const location = getLocation(req)
+
+  // Now that we've confirmed invoice is paid, create the discharge macaroon
+  let macaroon = new MacaroonsBuilder(
+    location,
+    process.env.CAVEAT_KEY, // this should be randomly generated, w/ enough entropy and of length > 32 bytes
+    invoiceId
+  )
+  // .add_first_party_caveat(`time < ${time}`)
+  // .getMacaroon()
+
+  if (caveat) macaroon.add_first_party_caveat(caveat)
+
+  macaroon = macaroon.getMacaroon()
+
+  return macaroon.serialize()
+}
+
+/*
+ * Utility function for get a location string to describe _where_ are
+ * useful for setting identifiers in macaroons
+ * @params {Express.request} req - expressjs request object
+ * @params {Express.request.headers} [headers] - optional headers property added by zeit's now
+ * @params {Express.request.hostname} - fallback if not in a now lambda
+ * @returns {String} - location string
+ */
+function getLocation({ headers, hostname }) {
+  return headers
+    ? headers['x-forwarded-proto'] + '://' + headers['x-now-deployment-url']
+    : hostname || 'self'
+}
+
+function getFirstPartyCaveat(req) {
+  return {
+    prefix: 'origin',
+    value: req.ip,
+    caveat: `origin = ${req.ip}`,
+    prefixMatch: value => /origin = .*/.test(value),
+  }
 }
 module.exports = app
