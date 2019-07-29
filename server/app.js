@@ -10,7 +10,6 @@ var bodyParser = require('body-parser')
 const MacaroonsBuilder = require('macaroons.js').MacaroonsBuilder
 const lnService = require('ln-service')
 
-const { test } = require('./helpers')
 let protectedRoute = require('./_entrypoint')
 
 const router = express.Router()
@@ -24,40 +23,7 @@ app.use(bodyParser.urlencoded({ extended: false }))
 // parse application/json
 app.use(bodyParser.json())
 
-/*
- * A utility function for testing our environment variables
- * to see if we can either create a connection with a self-hosted node
- * or use an OpenNode key. This will prioritize node configs over OpenNode
- */
-function testEnvVars() {
-  const { OPEN_NODE_KEY, LN_CERT, LN_MACAROON, LN_SOCKET } = process.env
-
-  const lndConfigs = [LN_CERT, LN_MACAROON, LN_SOCKET]
-
-  // if we have all lndConfigs then return true
-
-  if (lndConfigs.every(config => config !== undefined)) return true
-
-  // if we have no lnd configs but an OPEN_NODE_KEY then return true
-  if (lndConfigs.every(config => config === undefined) && OPEN_NODE_KEY)
-    return true
-
-  // if we have some lnd configs but not all, throw that we're missing some
-  if (lndConfigs.some(config => config === undefined))
-    throw new Error(
-      'Missing configs to connect to LND node. Need macaroon, socket, and tls cert.'
-    )
-
-  // otherwise we have no lnd configs and no OPEN_NODE_KEY
-  // throw that there are no ln configs
-  throw new Error(
-    'No configs set in environment to connect to a lightning node. \
-See README for instructions: https://github.com/bucko13/now-paywall'
-  )
-}
-
 app.use('*', async (req, res, next) => {
-  test()
   try {
     testEnvVars()
     const { OPEN_NODE_KEY, LN_CERT, LN_MACAROON, LN_SOCKET } = process.env
@@ -231,22 +197,62 @@ app.get('*/node', async (req, res) => {
 
 router.use(protectedRoute)
 
-// Placeholder for middleware to check for payment
-// TODO: replace with an actual function for verifying macaroons
 app.use('*/protected', (req, res, next) => {
   console.log('Checking if the request requires payment...')
-  /* 1. Check the macaroon
-   * 2. If checks path and the request is authenticated
-   *    then return next()
-   * 3. Else if the checks do not pass
-   *    then return a 402 error requiring payment
-   */
+  // if there is no macaroon at all
+  // then we need to request a new invoice
+  // create a root macaroon with the associated id
+  // and send back macaroon and invoice info back in response
+  // TODO: Do we want to separate the 402 response step from the invoice post step?
 
-  // this should be updated with the above steps
+  // if there is a macaroon but has not been fully validated
+  // (i.e. the invoice isn't paid and/or 3rd party caveat hasn't been discharged)
+  // run the check from `GET /invoice`
+  // if invoice is paid, add the discharge macaroon to the request/cookie
+  // and pass on to `next()`
+
+  // TODO: Remove the below once authentication steps are added
   if (req.query.paid) next()
   else return res.status(402).json({ message: 'Payment required!' })
 })
 
 app.use('*/protected', router)
 
+/****
+ **** Helper functions
+ **** builder only supports single import atm
+ **** so these all needs to be co-located in the entrypoint
+ ****/
+
+/*
+ * A utility function for testing our environment variables
+ * to see if we can either create a connection with a self-hosted node
+ * or use an OpenNode key. This will prioritize node configs over OpenNode
+ */
+function testEnvVars() {
+  const { OPEN_NODE_KEY, LN_CERT, LN_MACAROON, LN_SOCKET } = process.env
+
+  const lndConfigs = [LN_CERT, LN_MACAROON, LN_SOCKET]
+
+  // if we have all lndConfigs then return true
+
+  if (lndConfigs.every(config => config !== undefined)) return true
+
+  // if we have no lnd configs but an OPEN_NODE_KEY then return true
+  if (lndConfigs.every(config => config === undefined) && OPEN_NODE_KEY)
+    return true
+
+  // if we have some lnd configs but not all, throw that we're missing some
+  if (lndConfigs.some(config => config === undefined))
+    throw new Error(
+      'Missing configs to connect to LND node. Need macaroon, socket, and tls cert.'
+    )
+
+  // otherwise we have no lnd configs and no OPEN_NODE_KEY
+  // throw that there are no ln configs
+  throw new Error(
+    'No configs set in environment to connect to a lightning node. \
+See README for instructions: https://github.com/bucko13/now-paywall'
+  )
+}
 module.exports = app
