@@ -9,6 +9,7 @@ const cors = require('cors')
 var bodyParser = require('body-parser')
 const MacaroonsBuilder = require('macaroons.js').MacaroonsBuilder
 const lnService = require('ln-service')
+const cookieSession = require('cookie-session')
 
 let protectedRoute = require('./_entrypoint')
 
@@ -22,6 +23,17 @@ app.use(cors())
 app.use(bodyParser.urlencoded({ extended: false }))
 // parse application/json
 app.use(bodyParser.json())
+
+// a session cookie to store request macaroons in
+app.use(
+  cookieSession({
+    name: 'macaroon',
+    maxAge: 86400000,
+    secret: process.env.SESSION_SECRET || 'i_am_satoshi_08',
+    overwrite: false,
+    signed: true,
+  })
+)
 
 app.use('*', async (req, res, next) => {
   try {
@@ -53,46 +65,9 @@ app.use('*', async (req, res, next) => {
   }
 })
 
-app.post('*/invoice', async (req, res, next) => {
-  console.log('req.body:', req.body)
-  let { time, title, expiresAt, appName } = req.body // time in seconds
-
-  if (!appName) appName = `[unknown application @ ${req.ip}]`
-
-  if (!title) title = '[unknown data]'
-
+app.post('*/invoice', async (req, res) => {
   try {
-    console.log('creating invoice')
-    const description = `Access for ${time} seconds in ${appName} for requested data: ${title}`
-    const amount = time
-    let invoice
-    if (req.lnd) {
-      const _invoice = await lnService.createInvoice({
-        lnd: req.lnd,
-        description,
-        expires_at: expiresAt,
-        tokens: amount,
-      })
-      invoice.payreq = _invoice.request
-      invoice.id = _invoice.id
-      invoice.description = _invoice.description
-      invoice.createdAt = _invoice.created_at
-      invoice.amount = _invoice.tokens
-    } else if (req.opennode) {
-      const _invoice = await req.opennode.createCharge({
-        description,
-        amount,
-        auto_settle: false,
-      })
-      invoice.payreq = _invoice.lightning_invoice.payreq
-      invoice.id = _invoice.id
-      invoice.description = _invoice.description
-      invoice.createdAt = _invoice.created_at
-      invoice.amount = _invoice.amount
-    } else {
-      return next('No lightning node information configured on request object')
-    }
-
+    const invoice = await createInvoice(req)
     res.status(200).json(invoice)
   } catch (error) {
     console.error('error getting invoice:', error)
@@ -198,12 +173,17 @@ app.get('*/node', async (req, res) => {
 router.use(protectedRoute)
 
 app.use('*/protected', (req, res, next) => {
-  console.log('Checking if the request requires payment...')
+  console.log(
+    'Checking if the request has been authenticated or still requires payment...'
+  )
+  const rootMacaroon = req.session.macaroon
   // if there is no macaroon at all
-  // then we need to request a new invoice
-  // create a root macaroon with the associated id
-  // and send back macaroon and invoice info back in response
-  // TODO: Do we want to separate the 402 response step from the invoice post step?
+  if (!rootMacaroon) {
+    // then we need to request a new invoice
+    // create a root macaroon with the associated id
+    // and send back macaroon and invoice info back in response
+    // TODO: Do we want to separate the 402 response step from the invoice post step?
+  }
 
   // if there is a macaroon but has not been fully validated
   // (i.e. the invoice isn't paid and/or 3rd party caveat hasn't been discharged)
@@ -254,5 +234,54 @@ function testEnvVars() {
     'No configs set in environment to connect to a lightning node. \
 See README for instructions: https://github.com/bucko13/now-paywall'
   )
+}
+
+/*
+ * Utility to create an invoice based on either an authenticated lnd grpc instance
+ * or an opennode connection
+ * @params {Object} req - express request object that either contains an lnd or opennode object
+ * @returns {Object} invoice - returns an invoice with a payreq, id, description, createdAt, and
+ */
+async function createInvoice({ lnd, opennode, body, ip }) {
+  let { time, title, expiresAt, appName } = body // time in seconds
+
+  if (!appName) appName = `[unknown application @ ${ip}]`
+
+  if (!title) title = '[unknown data]'
+
+  let invoice = {}
+  console.log('creating invoice')
+  const description = `Access for ${time} seconds in ${appName} for requested data: ${title}`
+  const amount = time
+  if (lnd) {
+    const _invoice = await lnService.createInvoice({
+      lnd: lnd,
+      description,
+      expires_at: expiresAt,
+      tokens: amount,
+    })
+    invoice.payreq = _invoice.request
+    invoice.id = _invoice.id
+    invoice.description = _invoice.description
+    invoice.createdAt = _invoice.created_at
+    invoice.amount = _invoice.tokens
+  } else if (opennode) {
+    const _invoice = await opennode.createCharge({
+      description,
+      amount,
+      auto_settle: false,
+    })
+    invoice.payreq = _invoice.lightning_invoice.payreq
+    invoice.id = _invoice.id
+    invoice.description = _invoice.description
+    invoice.createdAt = _invoice.created_at
+    invoice.amount = _invoice.amount
+  } else {
+    throw new Error(
+      'No lightning node information configured on request object'
+    )
+  }
+
+  return invoice
 }
 module.exports = app
