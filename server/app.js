@@ -10,6 +10,7 @@ var bodyParser = require('body-parser')
 const MacaroonsBuilder = require('macaroons.js').MacaroonsBuilder
 const lnService = require('ln-service')
 
+const { test } = require('./helpers')
 let protectedRoute = require('./_entrypoint')
 
 const router = express.Router()
@@ -56,6 +57,7 @@ See README for instructions: https://github.com/bucko13/now-paywall'
 }
 
 app.use('*', async (req, res, next) => {
+  test()
   try {
     testEnvVars()
     const { OPEN_NODE_KEY, LN_CERT, LN_MACAROON, LN_SOCKET } = process.env
