@@ -34,7 +34,7 @@ app.use(
     name: 'macaroon',
     maxAge: 86400000,
     secret: process.env.SESSION_SECRET || 'i_am_satoshi_08',
-    overwrite: true,
+    overwrite: false,
     signed: true,
   })
 )
@@ -45,12 +45,14 @@ app.use(
     name: 'dischargeMacaroon',
     maxAge: 86400000,
     secret: process.env.SESSION_SECRET || 'i_am_satoshi_08',
-    overwrite: true,
+    overwrite: false,
     signed: true,
   })
 )
 
 app.use('*', async (req, res, next) => {
+  console.log('req.session.macaroon:', req.session.macaroon)
+  console.log('req.session.dischargeMacaroon:', req.session.dischargeMacaroon)
   try {
     testEnvVars()
     const { OPEN_NODE_KEY, LN_CERT, LN_MACAROON, LN_SOCKET } = process.env
@@ -160,6 +162,7 @@ app.use('*/protected', async (req, res, next) => {
     'Checking if the request has been authorized or still requires payment...'
   )
   const rootMacaroon = req.session.macaroon
+  console.log('Do we have a rootMacaroon?', rootMacaroon)
   // if there is no macaroon at all
   if (!rootMacaroon) {
     try {
