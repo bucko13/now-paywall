@@ -172,17 +172,28 @@ app.get('*/node', async (req, res) => {
 
 router.use(protectedRoute)
 
-app.use('*/protected', (req, res, next) => {
+app.use('*/protected', async (req, res, next) => {
   console.log(
     'Checking if the request has been authenticated or still requires payment...'
   )
   const rootMacaroon = req.session.macaroon
   // if there is no macaroon at all
   if (!rootMacaroon) {
-    // then we need to request a new invoice
-    // create a root macaroon with the associated id
-    // and send back macaroon and invoice info back in response
-    // TODO: Do we want to separate the 402 response step from the invoice post step?
+    try {
+      // then we need to request a new invoice
+      const invoice = await createInvoice(req)
+      // create a root macaroon with the associated id
+      const macaroon = await createMacaroon(invoice, req)
+      // and send back macaroon and invoice info back in response
+      req.session.macaroon = macaroon // eslint-disable-line
+      return res
+        .status(402)
+        .json({ invoice, message: 'Payment required to access content.' })
+      // TODO: Do we want to separate the 402 response step from the invoice post step?
+    } catch (e) {
+      const status = e.status || 400
+      return res.status(status).json({ message: e.message })
+    }
   }
 
   // if there is a macaroon but has not been fully validated
@@ -260,6 +271,7 @@ async function createInvoice({ lnd, opennode, body, ip }) {
       expires_at: expiresAt,
       tokens: amount,
     })
+
     invoice.payreq = _invoice.request
     invoice.id = _invoice.id
     invoice.description = _invoice.description
@@ -283,5 +295,45 @@ async function createInvoice({ lnd, opennode, body, ip }) {
   }
 
   return invoice
+}
+
+/*
+ * Given an invoice object and a request
+ * we want to create a root macaroon with a third party caveat, which both need to be
+ * satisfied in order to authenticate the macaroon
+ * @params {invoice.id} - invoice must at least have an id for creating the 3rd party caveat
+ * @params {Object} req - request object is needed for identification of the macaroon, in particular
+ * the headers and the originating ip
+ * @returns {Macaroon} - serialized macaroon object
+ */
+
+async function createMacaroon(invoice, req) {
+  if (!invoice || !invoice.id)
+    throw new Error('Missing an invoice object. Cannot create macaroon')
+  if (!req) throw new Error('Missing req object. Cannot create macaroon')
+
+  const location = req.headers
+    ? req.headers['x-now-deployment-url']
+    : req.hostname || 'self'
+  const secret = process.env.SESSION_SECRET || 'i_am_satoshi_08'
+  const publicIdentifier = 'session secret'
+  const builder = new MacaroonsBuilder(
+    location,
+    secret,
+    publicIdentifier
+  ).add_first_party_caveat(`origin = ${req.ip}`) // origin ip must match this value. Preventative measure against sybil/DoS attacks
+
+  const caveatKey = process.env.CAVEAT_KEY
+
+  // when protecting "local" content, i.e. this is being used as a paywall to protect
+  // content in the same location as the middleware is implemented, then the third party
+  // caveat is discharged by the current host as well, so location is the same for both.
+  // In alternative scenarios, where now-paywall is being used to authenticate access at another source
+  // then this will be different. e.g. see Prism Reader as an example
+  const macaroon = builder
+    .add_third_party_caveat(location, caveatKey, invoice.id)
+    .getMacaroon()
+
+  return macaroon.serialize()
 }
 module.exports = app
