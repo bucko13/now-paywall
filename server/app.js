@@ -121,7 +121,7 @@ app.post('*/invoice', async (req, res, next) => {
 
     res.status(200).json(invoice)
   } catch (error) {
-    console.error(`${error.status} | ${error.message}`)
+    console.error('error getting invoice:', error)
     res.status(400).json({ message: error.message })
   }
 })
@@ -193,7 +193,7 @@ app.get('*/invoice', async (req, res, next) => {
         .json({ message: `unknown invoice status ${status}` })
     }
   } catch (error) {
-    console.error(`${error.status} | ${error.message}`)
+    console.error('error getting invoice:', error)
     res.status(400).json({ message: error.message })
   }
 })
