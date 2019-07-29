@@ -23,10 +23,6 @@ app.use(bodyParser.urlencoded({ extended: false }))
 // parse application/json
 app.use(bodyParser.json())
 
-// TODO: Test if we can do our required operations with just the
-// invoice.macaroon. Mostly a question of if ln-service works
-// with that macaroon, but should be ok.
-
 /*
  * A utility function for testing our environment variables
  * to see if we can either create a connection with a self-hosted node
@@ -103,18 +99,28 @@ app.post('*/invoice', async (req, res, next) => {
     const amount = time
     let invoice
     if (req.lnd) {
-      invoice = await lnService.createInvoice({
+      const _invoice = await lnService.createInvoice({
         lnd: req.lnd,
         description,
         expires_at: expiresAt,
         tokens: amount,
       })
+      invoice.payreq = _invoice.request
+      invoice.id = _invoice.id
+      invoice.description = _invoice.description
+      invoice.createdAt = _invoice.created_at
+      invoice.amount = _invoice.tokens
     } else if (req.opennode) {
-      invoice = await req.opennode.createCharge({
+      const _invoice = await req.opennode.createCharge({
         description,
         amount,
         auto_settle: false,
       })
+      invoice.payreq = _invoice.lightning_invoice.payreq
+      invoice.id = _invoice.id
+      invoice.description = _invoice.description
+      invoice.createdAt = _invoice.created_at
+      invoice.amount = _invoice.amount
     } else {
       return next('No lightning node information configured on request object')
     }
@@ -173,7 +179,7 @@ app.get('*/invoice', async (req, res, next) => {
       // Now that we've confirmed invoice is paid, create the discharge macaroon
       const macaroon = new MacaroonsBuilder(
         location,
-        process.env.CAVEAT_KEY,
+        process.env.CAVEAT_KEY, // this should be randomly generated, w/ enough entropy and of length > 32 bytes
         invoiceId
       )
         .add_first_party_caveat(`time < ${time}`)
