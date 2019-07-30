@@ -187,17 +187,17 @@ app.use('*/protected', async (req, res, next) => {
   // check that we also have the discharge macaroon passed either in request query or a session cookie
   let dischargeMacaroon =
     req.query.dischargeMacaroon || req.session.dischargeMacaroon
-  let invoiceId
+
+  // need the invoiceId, either from the req query or from the root macaroon
+  // we'll leave the retrieval from the req.query in case we end up updating the
+  // the first party caveat in the future or adding flexibility to it.
+  let invoiceId = req.query.id
+  if (!invoiceId) invoiceId = getFirstPartyCaveatFromMacaroon(rootMacaroon)
+  req.invoiceId = invoiceId
+
   // if no discharge macaroon then we need to check on the status of the invoice
   // this can also be done in a separate request to GET /invoice
   if (!dischargeMacaroon) {
-    // need the invoiceId, either from the req query or from the root macaroon
-    // we'll leave the retrieval from the req.query in case we end up updating the
-    // the first party caveat in the future or adding flexibility to it.
-    invoiceId = req.query.id
-    if (!invoiceId) invoiceId = getFirstPartyCaveatFromMacaroon(rootMacaroon)
-    req.invoiceId = invoiceId
-
     // then check status of invoice (Note: Anyone can pay this! It's not tied to the request or origin.
     // Once paid, the requests are authorized and can get the macaroon)
     const { status, amount, payreq } = await checkInvoiceStatus(req)
@@ -239,8 +239,13 @@ app.use('*/protected', async (req, res, next) => {
   } catch (e) {
     // if throws with an error message that includes text "expired"
     // then payment is required again
-    if (e.message.toLowerCase().includes('expired'))
+    if (e.message.toLowerCase().includes('expired')) {
+      console.error('Request for content with expired macaroon')
+      // clear cookies so that new invoices can be requested
+      req.session.macaroon = null // eslint-disable-line
+      req.session.dischargeMacaroon = null // eslint-disable-line
       return res.status(402).json({ message: e.message })
+    }
     console.error('there was an error validating the macaroon:', e.message)
     return res
       .status(500)
@@ -481,8 +486,11 @@ function validateMacaroons(root, discharge, exactCaveat) {
     caveat = caveat.getValueAsText()
     // TODO: should probably generalize the exact caveat check or export as constant.
     // This would fail even if there is a space missing in the caveat creation
-    if (exactCaveat.prefixMatch(caveat) && caveat !== exactCaveat.caveat)
-      throw new Error('Document id did not match macaroon')
+    if (exactCaveat.prefixMatch(caveat) && caveat !== exactCaveat.caveat) {
+      console.log('exactCaveat:', exactCaveat.caveat)
+      console.log('caveat:', caveat)
+      throw new Error(`${exactCaveat.key} did not match with macaroon`)
+    }
   }
 }
 
