@@ -401,7 +401,7 @@ async function createRootMacaroon(invoice, req) {
 }
 
 /*
- * Checkst the status of an invoice given an id
+ * Checks the status of an invoice given an id
  * @params {express.request} - request object from expressjs
  * @params {req.query.id} invoiceId - id of invoice to check status of
  * @params {req.lnd} [lnd] - ln-service authenticated grpc object
@@ -487,8 +487,6 @@ function validateMacaroons(root, discharge, exactCaveat) {
     // TODO: should probably generalize the exact caveat check or export as constant.
     // This would fail even if there is a space missing in the caveat creation
     if (exactCaveat.prefixMatch(caveat) && caveat !== exactCaveat.caveat) {
-      console.log('exactCaveat:', exactCaveat.caveat)
-      console.log('caveat:', caveat)
       throw new Error(`${exactCaveat.key} did not match with macaroon`)
     }
   }
@@ -548,7 +546,7 @@ function getFirstPartyCaveatFromMacaroon(serialized) {
 }
 
 /*
- * Utility function for get a location string to describe _where_ are
+ * Utility function to get a location string to describe _where_ the server is.
  * useful for setting identifiers in macaroons
  * @params {Express.request} req - expressjs request object
  * @params {Express.request.headers} [headers] - optional headers property added by zeit's now
@@ -562,7 +560,8 @@ function getLocation({ headers, hostname }) {
 }
 
 // returns a set of mostly constants that describes the first party caveat
-// this is set on a root macaroon
+// this is set on a root macaroon. Supports an empty invoiceId
+// since we can use this for matching the prefix on a populated macaroon caveat
 function getFirstPartyCaveat(invoiceId = '') {
   return {
     key: 'invoiceId',
