@@ -1,6 +1,6 @@
 {
   "name": "now-paywall",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "main": "index.js",
   "description": "Zeit lambda deployment for a Nodejs Lightning-powered Paywall",
   "author": "Bucko",
