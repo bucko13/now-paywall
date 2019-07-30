@@ -167,7 +167,7 @@ app.use('*/protected', async (req, res, next) => {
       // then we need to request a new invoice
       const invoice = await createInvoice(req)
       // create a root macaroon with the associated id
-      const macaroon = await createMacaroon(invoice, req)
+      const macaroon = await createRootMacaroon(invoice, req)
       // and send back macaroon and invoice info back in response
       req.session.macaroon = macaroon // eslint-disable-line
       return res
@@ -186,15 +186,16 @@ app.use('*/protected', async (req, res, next) => {
   // check that we also have the discharge macaroon passed either in request query or a session cookie
   let dischargeMacaroon =
     req.query.dischargeMacaroon || req.session.dischargeMacaroon
-
+  let invoiceId
   // if no discharge macaroon then we need to check on the status of the invoice
   // this can also be done in a separate request to GET /invoice
   if (!dischargeMacaroon) {
-    getInvoiceFromMacaroon(rootMacaroon)
-    if (!req.query.id)
-      return next(
-        'Require an invoice id in the request in order to generate discharge macaroon'
-      )
+    // need the invoiceId, either from the req query or from the root macaroon
+    // we'll leave the retrieval from the req.query in case we end up updating the
+    // the first party caveat in the future or adding flexibility to it.
+    invoiceId = req.query.id
+    if (!invoiceId) invoiceId = getFirstPartyCaveatFromMacaroon(rootMacaroon)
+    req.invoiceId = invoiceId
 
     // then check status of invoice (Note: Anyone can pay this! It's not tied to the request or origin.
     // Once paid, the requests are authorized and can get the macaroon)
@@ -227,11 +228,11 @@ app.use('*/protected', async (req, res, next) => {
   // otherwise if there is a discharge macaroon, then we want to verify the whole macaroon
   try {
     // make sure request is authenticated by validating the macaroons
-    const exactCaveat = getFirstPartyCaveat(req)
+    const exactCaveat = getFirstPartyCaveat(invoiceId)
     validateMacaroons(rootMacaroon, dischargeMacaroon, exactCaveat)
     // if everything validates then simply run `next()`
     console.log(
-      'Request from ${req.hostname} authenticated with payment. Sending through paywall'
+      `Request from ${req.hostname} authenticated with payment. Sending through paywall`
     )
     next()
   } catch (e) {
@@ -343,19 +344,23 @@ async function createInvoice({ lnd, opennode, body, ip }) {
  * @returns {Macaroon} - serialized macaroon object
  */
 
-async function createMacaroon(invoice, req) {
-  if (!invoice || !invoice.id)
-    throw new Error('Missing an invoice object. Cannot create macaroon')
+async function createRootMacaroon(invoice, req) {
+  if (!invoice && !invoice.id)
+    throw new Error(
+      'Missing an invoice object with an id. Cannot create macaroon'
+    )
   if (!req) throw new Error('Missing req object. Cannot create macaroon')
 
   const location = getLocation(req)
   const secret = process.env.SESSION_SECRET || 'i_am_satoshi_08'
   const publicIdentifier = 'session secret'
+  // caveat is created to make sure invoice id matches when validating with this macaroon
+  const { caveat } = getFirstPartyCaveat(invoice.id)
   const builder = new MacaroonsBuilder(
     location,
     secret,
     publicIdentifier
-  ).add_first_party_caveat(`origin = ${req.ip}`) // origin ip must match this value. Preventative measure against sybil/DoS attacks
+  ).add_first_party_caveat(caveat)
 
   const caveatKey = process.env.CAVEAT_KEY
 
@@ -380,7 +385,13 @@ async function createMacaroon(invoice, req) {
  * @returns {Object} - status - Object with status, amount, and payment request
  */
 
-async function checkInvoiceStatus({ lnd, opennode, query: { id: invoiceId } }) {
+async function checkInvoiceStatus({
+  lnd,
+  opennode,
+  query: { id },
+  invoiceId: _invoiceId,
+}) {
+  const invoiceId = id || _invoiceId
   if (!invoiceId) throw new Error('Missing invoice id.')
 
   let status, amount, payreq
@@ -464,8 +475,7 @@ function validateMacaroons(root, discharge, exactCaveat) {
  * @returns {Macaroon} discharge macaroon
  */
 function getDischargeMacaroon(req, caveat) {
-  const { id: invoiceId } = req.query
-
+  const invoiceId = req.query.id || req.invoiceId
   if (!invoiceId) throw new Error('Missing invoiceId in request')
 
   // check if there is a caveat key before proceeding
@@ -493,11 +503,25 @@ function getDischargeMacaroon(req, caveat) {
   return macaroon.serialize()
 }
 
-function getInvoiceFromMacaroon(serialized) {
+/*
+ * Utility to extract first party caveat value from a serialized root macaroon
+ * See `getFirstPartyCaveat` for what this value represents
+ */
+function getFirstPartyCaveatFromMacaroon(serialized) {
   let macaroon = MacaroonsBuilder.deserialize(serialized)
-  macaroon = macaroon.inspect()
-  console.log('macaroon:', macaroon)
+  const firstPartyCaveat = getFirstPartyCaveat()
+  for (let caveat of macaroon.caveatPackets) {
+    caveat = caveat.getValueAsText()
+    // find the caveat where the prefix matches our root caveat
+    if (firstPartyCaveat.prefixMatch(caveat)) {
+      // split on the separator, which should be an equals sign
+      const [, value] = caveat.split(firstPartyCaveat.separator)
+      // return value of the first party caveat (e.g. invoice id)
+      return value.trim()
+    }
+  }
 }
+
 /*
  * Utility function for get a location string to describe _where_ are
  * useful for setting identifiers in macaroons
@@ -512,12 +536,15 @@ function getLocation({ headers, hostname }) {
     : hostname || 'self'
 }
 
-function getFirstPartyCaveat(req) {
+// returns a set of mostly constants that describes the first party caveat
+// this is set on a root macaroon
+function getFirstPartyCaveat(invoiceId = '') {
   return {
-    prefix: 'origin',
-    value: req.ip,
-    caveat: `origin = ${req.ip}`,
-    prefixMatch: value => /origin = .*/.test(value),
+    key: 'invoiceId',
+    value: invoiceId,
+    separator: '=',
+    caveat: `invoiceId = ${invoiceId}`,
+    prefixMatch: value => /invoiceId = .*/.test(value),
   }
 }
 module.exports = app
