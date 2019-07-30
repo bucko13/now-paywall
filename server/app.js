@@ -10,6 +10,7 @@ var bodyParser = require('body-parser')
 const {
   MacaroonsBuilder,
   MacaroonsVerifier,
+  MacaroonsConstants: { MACAROON_SUGGESTED_SECRET_LENGTH },
   verifier,
 } = require('macaroons.js')
 const lnService = require('ln-service')
@@ -33,7 +34,7 @@ app.use(
   cookieSession({
     name: 'macaroon',
     maxAge: 86400000,
-    secret: process.env.SESSION_SECRET || 'i_am_satoshi_08',
+    secret: process.env.SESSION_SECRET,
     overwrite: true,
     signed: true,
   })
@@ -44,7 +45,7 @@ app.use(
   cookieSession({
     name: 'dischargeMacaroon',
     maxAge: 86400000,
-    secret: process.env.SESSION_SECRET || 'i_am_satoshi_08',
+    secret: process.env.SESSION_SECRET,
     overwrite: true,
     signed: true,
   })
@@ -216,7 +217,7 @@ app.use('*/protected', async (req, res, next) => {
       // then create a discharge macaroon and attach it to a session cookie
       req.session.dischargeMacaroon = dischargeMacaroon // eslint-disable-line
     } else if (status === 'processing' || status === 'unpaid') {
-      console.log('still processing invoice %s...', req.query.id)
+      console.log('still processing invoice %s...', invoiceId)
       return res.status(202).json({ status, payreq })
     } else {
       return res
@@ -240,7 +241,10 @@ app.use('*/protected', async (req, res, next) => {
     // then payment is required again
     if (e.message.toLowerCase().includes('expired'))
       return res.status(402).json({ message: e.message })
-    return res.status(400).json({ message: e.message })
+    console.error('there was an error validating the macaroon:', e.message)
+    return res
+      .status(500)
+      .json({ message: 'Server error. Please contact paywall administrator.' })
   }
 })
 
@@ -258,10 +262,25 @@ app.use('*/protected', router)
  * or use an OpenNode key. This will prioritize node configs over OpenNode
  */
 function testEnvVars() {
-  const { OPEN_NODE_KEY, LN_CERT, LN_MACAROON, LN_SOCKET } = process.env
+  const {
+    OPEN_NODE_KEY,
+    LN_CERT,
+    LN_MACAROON,
+    LN_SOCKET,
+    SESSION_SECRET,
+  } = process.env
 
+  // first check if we have a session secret w/ sufficient bytes
+  if (
+    !SESSION_SECRET ||
+    SESSION_SECRET.length < MACAROON_SUGGESTED_SECRET_LENGTH
+  )
+    throw new Error(
+      'Must have a SESSION_SECRET env var for signing macaroons with minimum lenght of 32 bytes.'
+    )
+
+  // next check lnd configs
   const lndConfigs = [LN_CERT, LN_MACAROON, LN_SOCKET]
-
   // if we have all lndConfigs then return true
 
   if (lndConfigs.every(config => config !== undefined)) return true
@@ -352,7 +371,7 @@ async function createRootMacaroon(invoice, req) {
   if (!req) throw new Error('Missing req object. Cannot create macaroon')
 
   const location = getLocation(req)
-  const secret = process.env.SESSION_SECRET || 'i_am_satoshi_08'
+  const secret = process.env.SESSION_SECRET
   const publicIdentifier = 'session secret'
   // caveat is created to make sure invoice id matches when validating with this macaroon
   const { caveat } = getFirstPartyCaveat(invoice.id)
@@ -493,8 +512,6 @@ function getDischargeMacaroon(req, caveat) {
     process.env.CAVEAT_KEY, // this should be randomly generated, w/ enough entropy and of length > 32 bytes
     invoiceId
   )
-  // .add_first_party_caveat(`time < ${time}`)
-  // .getMacaroon()
 
   if (caveat) macaroon.add_first_party_caveat(caveat)
 
